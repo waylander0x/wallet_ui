@@ -27,15 +27,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // get Wallet Balances
 async function getWalletBalances(walletAddress) {
-    if (!walletAddress) return []; 
+    if (!walletAddress) return []; // Return empty if no address
 
+    // Construct the query parameters
+    // metadata=url,logo fetches token URLs and logo images
+    // exclude_spam_tokens=true filters out known spam tokens
     const queryParams = `metadata=url,logo&exclude_spam_tokens=true`;
+
     const url = `https://api.sim.dune.com/v1/evm/balances/${walletAddress}?${queryParams}`;
 
     try {
         const response = await fetch(url, {
             headers: {
-                'X-Sim-Api-Key': SIM_API_KEY,
+                'X-Sim-Api-Key': SIM_API_KEY, // Your API key from .env
                 'Content-Type': 'application/json'
             }
         });
@@ -47,27 +51,13 @@ async function getWalletBalances(walletAddress) {
         }
 
         const data = await response.json();
-        
-        // Return formatted values and amounts
-        return (data.balances || []).map(token => {
-            // 1. Calculate human-readable token amount
-            const numericAmount = parseFloat(token.amount) / Math.pow(10, parseInt(token.decimals));
-            // 2. Get numeric USD value
-            const numericValueUSD = parseFloat(token.value_usd);
-            // 3. Format using numbro
-            const valueUSDFormatted = numbro(numericValueUSD).format('$0,0.00');
-            const amountFormatted = numbro(numericAmount).format('0,0.[00]A');
 
-            return {
-                ...token,
-                valueUSDFormatted,
-                amountFormatted
-            };
-        }).filter(token => token.symbol !== 'RTFKT'); // Removing Spam Tokens. Add more if you like.
+        // The API returns JSON with a "balances" key. We return that directly.
+        return data.balances;
 
     } catch (error) {
         console.error("Error fetching wallet balances:", error.message);
-        return []; 
+        return []; // Return empty array on error
     }
 }
 
@@ -79,12 +69,25 @@ app.get('/', async (req, res) => {
     } = req.query;
 
     let tokens = [];
-    let totalWalletUSDValue = 0;
+    let totalWalletUSDValue = 0; // Will be updated
     let errorMessage = null;
 
     if (walletAddress) {
         try {
             tokens = await getWalletBalances(walletAddress);
+
+            // Calculate the total USD value from the fetched tokens
+            if (tokens && tokens.length > 0) {
+                tokens.forEach(token => {
+                    let individualValue = parseFloat(token.value_usd);
+                    if (!isNaN(individualValue)) {
+                        totalWalletUSDValue += individualValue;
+                    }
+                });
+            }
+            
+            totalWalletUSDValue = numbro(totalWalletUSDValue).format('$0,0.00');
+
         } catch (error) {
             console.error("Error in route handler:", error);
             errorMessage = "Failed to fetch wallet data. Please try again.";
@@ -95,7 +98,7 @@ app.get('/', async (req, res) => {
     res.render('wallet', {
         walletAddress: walletAddress,
         currentTab: tab,
-        totalWalletUSDValue: `$0.00`, // We'll calculate this in the next section
+        totalWalletUSDValue: totalWalletUSDValue, // Pass the calculated total
         tokens: tokens,
         activities: [], // Placeholder for Guide 2
         collectibles: [], // Placeholder for Guide 3
