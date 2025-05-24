@@ -39,7 +39,7 @@ async function getWalletBalances(walletAddress) {
     try {
         const response = await fetch(url, {
             headers: {
-                'X-Sim-Api-Key': SIM_API_KEY, // Your API key from .env
+                'X-Sim-Api-Key': SIM_API_KEY, // my api key
                 'Content-Type': 'application/json'
             }
         });
@@ -52,8 +52,22 @@ async function getWalletBalances(walletAddress) {
 
         const data = await response.json();
 
-        // The API returns JSON with a "balances" key. We return that directly.
-        return data.balances;
+        // Return formatted values and amounts
+        return (data.balances || []).map(token => {
+            // 1. Calculate human-readable token amount
+            const numericAmount = parseFloat(token.amount) / Math.pow(10, parseInt(token.decimals));
+            // 2. Get numeric USD value
+            const numericValueUSD = parseFloat(token.value_usd);
+            // 3. Format using numbro
+            const valueUSDFormatted = numbro(numericValueUSD).format('$0,0.00');
+            const amountFormatted = numbro(numericAmount).format('0,0.[00]A');
+
+            return {
+                ...token,
+                valueUSDFormatted,
+                amountFormatted
+            };
+        }).filter(token => token.symbol !== 'RTFKT'); // Removing Spam Tokens. 
 
     } catch (error) {
         console.error("Error fetching wallet balances:", error.message);
@@ -70,7 +84,7 @@ async function getWalletActivity(walletAddress, limit = 25) { // Default to fetc
     try {
         const response = await fetch(url, {
             headers: {
-                'X-Sim-Api-Key': SIM_API_KEY, // Your API key from .env
+                'X-Sim-Api-Key': SIM_API_KEY, //
                 'Content-Type': 'application/json'
             }
         });
@@ -90,6 +104,33 @@ async function getWalletActivity(walletAddress, limit = 25) { // Default to fetc
     }
 }
 
+async function getWalletCollectibles(walletAddress, limit = 50) { // Default to fetching up to 50 collectibles
+    if (!walletAddress) return [];
+
+    const url = `https://api.sim.dune.com/v1/evm/collectibles/${walletAddress}?limit=${limit}`;
+
+    try {
+        const response = await fetch(url, {
+            headers: {
+                'X-Sim-Api-Key': SIM_API_KEY, // Your API key from .env
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            const errorBody = await response.text();
+            console.error(`Collectibles API request failed with status ${response.status}: ${response.statusText}`, errorBody);
+            throw new Error(`Collectibles API request failed: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        return data.collectibles || []; 
+    } catch (error) {
+        console.error("Error fetching wallet collectibles:", error.message);
+        return []; // Return empty array on error
+    }
+}
+
 // Add our home route
 app.get('/', async (req, res) => {
     const { 
@@ -99,18 +140,12 @@ app.get('/', async (req, res) => {
 
     let tokens = [];
     let activities = [];
-    let collectibles = [];
+    let collectibles = []; // Initialize collectibles array
     let totalWalletUSDValue = 0;
     let errorMessage = null;
 
     if (walletAddress) {
         try {
-
-            [tokens, activities] = await Promise.all([
-                getWalletBalances(walletAddress),
-                getWalletActivity(walletAddress, 25) // Fetching 25 recent activities
-            ]);
-
             // Calculate the total USD value from the fetched tokens
             if (tokens && tokens.length > 0) {
                 tokens.forEach(token => {
@@ -122,21 +157,33 @@ app.get('/', async (req, res) => {
             }
             
             totalWalletUSDValue = numbro(totalWalletUSDValue).format('$0,0.00');
+            // Fetch balances, activities, and collectibles concurrently for better performance
+            [tokens, activities, collectibles] = await Promise.all([
+                getWalletBalances(walletAddress),
+                getWalletActivity(walletAddress, 25), // Fetching 25 recent activities
+                getWalletCollectibles(walletAddress, 50) // Fetching up to 50 collectibles
+            ]);
 
+            // Calculate total portfolio value from token balances (Guide 1)
+            if (tokens && tokens.length > 0) {
+                totalWalletUSDValue = tokens.reduce((sum, token) => {
+                    const value = parseFloat(token.value_usd);
+                    return sum + (isNaN(value) ? 0 : value);
+                }, 0);
+            }
         } catch (error) {
-            console.error("Error in route handler:", error);
+            console.error("Error in route handler fetching all data:", error);
             errorMessage = "Failed to fetch wallet data. Please try again.";
-            // tokens will remain empty, totalWalletUSDValue will be 0
         }
     }
-
+    
     res.render('wallet', {
         walletAddress: walletAddress,
         currentTab: tab,
-        totalWalletUSDValue: totalWalletUSDValue, // We'll calculate this in the next section
+        totalWalletUSDValue: `$${totalWalletUSDValue.toFixed(2)}`,
         tokens: tokens,
-        activities: activities, // Placeholder for Guide 2
-        collectibles: [], // Placeholder for Guide 3
+        activities: activities,
+        collectibles: collectibles, // Pass collectibles to the template
         errorMessage: errorMessage
     });
 });
