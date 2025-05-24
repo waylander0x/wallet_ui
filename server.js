@@ -60,6 +60,35 @@ async function getWalletBalances(walletAddress) {
         return []; // Return empty array on error
     }
 }
+async function getWalletActivity(walletAddress, limit = 25) { // Default to fetching 25 activities
+    if (!walletAddress) return [];
+
+    // The Activity API is currently in beta.
+    // We add a 'limit' query parameter to control how many activities are returned.
+    const url = `https://api.sim.dune.com/v1/evm/activity/${walletAddress}?limit=${limit}`;
+
+    try {
+        const response = await fetch(url, {
+            headers: {
+                'X-Sim-Api-Key': SIM_API_KEY, // Your API key from .env
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            const errorBody = await response.text();
+            console.error(`Activity API request failed with status ${response.status}: ${response.statusText}`, errorBody);
+            throw new Error(`Activity API request failed: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        // The API returns activity items in the 'activity' key of the JSON response.
+        return data.activity || []; 
+    } catch (error) {
+        console.error("Error fetching wallet activity:", error.message);
+        return []; // Return empty array on error
+    }
+}
 
 // Add our home route
 app.get('/', async (req, res) => {
@@ -69,12 +98,18 @@ app.get('/', async (req, res) => {
     } = req.query;
 
     let tokens = [];
-    let totalWalletUSDValue = 0; // Will be updated
+    let activities = [];
+    let collectibles = [];
+    let totalWalletUSDValue = 0;
     let errorMessage = null;
 
     if (walletAddress) {
         try {
-            tokens = await getWalletBalances(walletAddress);
+
+            [tokens, activities] = await Promise.all([
+                getWalletBalances(walletAddress),
+                getWalletActivity(walletAddress, 25) // Fetching 25 recent activities
+            ]);
 
             // Calculate the total USD value from the fetched tokens
             if (tokens && tokens.length > 0) {
@@ -98,9 +133,9 @@ app.get('/', async (req, res) => {
     res.render('wallet', {
         walletAddress: walletAddress,
         currentTab: tab,
-        totalWalletUSDValue: totalWalletUSDValue, // Pass the calculated total
+        totalWalletUSDValue: totalWalletUSDValue, // We'll calculate this in the next section
         tokens: tokens,
-        activities: [], // Placeholder for Guide 2
+        activities: activities, // Placeholder for Guide 2
         collectibles: [], // Placeholder for Guide 3
         errorMessage: errorMessage
     });
